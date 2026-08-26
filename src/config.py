@@ -5,8 +5,10 @@ import torch
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 # ========== 路径 ==========
-TRAIN = Path("../data/train")
-TEST = Path("../data/test")
+DATA_ROOT: Path = Path("../data")
+TRAIN: Path = DATA_ROOT / "train"
+TEST: Path = DATA_ROOT / "test"
+LABELS: Path = DATA_ROOT / "labels.json"
 FIGURES = Path("../results/figures")
 LOGS = Path("../logs")
 CHECKPOINTS = Path("../checkpoints")

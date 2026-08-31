@@ -1,32 +1,44 @@
 from pathlib import Path
 import torch
 
+
 # ========== 设备 ==========
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 # ========== 路径 ==========
-DATA_ROOT: Path = Path("../data")
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DATA_ROOT: Path = PROJECT_ROOT / "data"
 TRAIN: Path = DATA_ROOT / "train"
 TEST: Path = DATA_ROOT / "test"
-LABELS: Path = DATA_ROOT / "labels.json"
+LABELS: Path = DATA_ROOT / "Labels.json"
+SPLIT: Path = DATA_ROOT / "split.json"
+RESULTS = Path("../results")
 FIGURES = Path("../results/figures")
 LOGS = Path("../logs")
+TENSORBOARD: Path = LOGS / "tensorboard"
 CHECKPOINTS = Path("../checkpoints")
 
 # ========== 数据 ==========
 TRAIN_VAL_SPLIT_RATIO = 0.95
 BATCH_SIZE = 128
-GRAD_ACCUM_STEPS = 1 
-NUM_WORKERS = 12
+NUM_WORKERS = 10
 IMAGE_SIZE = 224
 MEAN = (0.485, 0.456, 0.406)
 STD  = (0.229, 0.224, 0.225)
 SEED = 42
 
+# ========== 数据增强 ==========
+NUM_OPS = 2
+RANDAUGMENT_MAGNITUDE = 9
+RANDOM_ERASING_P = 0.25
+MIXUP_ALPHA = 0.2
+CUTMIX_ALPHA = 1.0
+PREFECTCH_FACTOR = 4
+
 # ========== 训练 ==========
-EPOCHS = 150
+EPOCHS = 200
 WARMUP_EPOCHS = 5
-BASE_LR = 0.1 * (BATCH_SIZE * GRAD_ACCUM_STEPS) / 256
+BASE_LR = 0.1 * BATCH_SIZE  / 256
 WEIGHT_DECAY = 1e-4
 LABEL_SMOOTHING = 0.1
 USE_AMP = True

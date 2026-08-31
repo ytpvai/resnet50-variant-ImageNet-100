@@ -15,7 +15,7 @@ def train_val_split(ratio: float = TRAIN_VAL_SPLIT_RATIO, seed: int = SEED):
     random.seed(seed)
     train_samples, val_samples = [], []
 
-    with open(LABELS, "r") as f:
+    with open(LABELS, "r", encoding="utf-8") as f:
         labels = json.load(f)
     
     # 用sorted保证序列对应
@@ -24,7 +24,7 @@ def train_val_split(ratio: float = TRAIN_VAL_SPLIT_RATIO, seed: int = SEED):
 
     for i, cls in enumerate(classes):
         class_dir = TRAIN / cls
-        files = list(class_dir.iterdir())
+        files = [f for f in class_dir.iterdir() if f.is_file()]
         random.shuffle(files)
         indexes = int(len(files) * ratio)
 
@@ -32,15 +32,16 @@ def train_val_split(ratio: float = TRAIN_VAL_SPLIT_RATIO, seed: int = SEED):
         val_samples += [(str(f), i) for f in files[indexes :]]
     
     # 存成json形式
-    with open(DATA_ROOT / "split.json", "w") as f:
+    with open(DATA_ROOT / "split.json", "w", encoding="utf-8") as f:
         json.dump({
             "train": train_samples,
             "val": val_samples,
             "classes": classes,
             "class_names": class_names
-        })
+        }, f)
     
     print(f"已按比例{ratio}划分好train和val为一文件 {DATA_ROOT / 'split.json'}")
+    print(f"train: {len(train_samples)} 张, val: {len(val_samples)} 张")
     print()
 
 

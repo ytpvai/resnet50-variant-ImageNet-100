@@ -35,7 +35,7 @@ def get_dataloader(split_path: Path):
     transform_train = T.Compose([
         T.RandomResizedCrop(IMAGE_SIZE),
         T.RandomHorizontalFlip(),
-        T.RandAugment(NUM_OPS),
+        T.RandAugment(num_ops=NUM_OPS, magnitude=RAND_AUGMENT_MAGNITUDE),
         T.ToTensor(),
         T.Normalize(MEAN, STD),
         T.RandomErasing(p=RANDOM_ERASING_P)

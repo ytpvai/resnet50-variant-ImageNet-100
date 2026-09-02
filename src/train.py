@@ -136,7 +136,7 @@ def main():
     )
     parser.add_argument(
         "--model-type", type=str, default="resnet50",
-        choices=["resnet50"],
+        choices=["resnet50", "4_SE", "3SE_1incep"],
         help="可选模型类型"
     )
     args = parser.parse_args()
@@ -158,7 +158,7 @@ def main():
     train_loader, val_loader = get_dataloader(Path(args.split_json))
     len_epoch = len(train_loader)
     model = get_model(args.model_type)
-    criterion = nn.CrossEntropyLoss().to(DEVICE)
+    criterion = nn.CrossEntropyLoss(label_smoothing=LABEL_SMOOTHING).to(DEVICE)
     optimizer = torch.optim.SGD(
         model.parameters(),
         lr=BASE_LR,

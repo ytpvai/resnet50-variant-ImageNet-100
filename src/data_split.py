@@ -24,7 +24,9 @@ def train_val_split(ratio: float = TRAIN_VAL_SPLIT_RATIO, seed: int = SEED):
 
     for i, cls in enumerate(classes):
         class_dir = TRAIN / cls
-        files = [f for f in class_dir.iterdir() if f.is_file()]
+
+        # 先排好序使在不同设备打乱效果可复现
+        files = sorted(f for f in class_dir.iterdir() if f.is_file())
         random.shuffle(files)
         indexes = int(len(files) * ratio)
 

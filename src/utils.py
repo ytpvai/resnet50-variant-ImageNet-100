@@ -42,6 +42,7 @@ def get_dataloader(split_path: Path):
     ])
     transform_val = T.Compose([
         T.Resize(256),
+        T.CenterCrop(IMAGE_SIZE),
         T.ToTensor(),
         T.Normalize(MEAN, STD)
     ])

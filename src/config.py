@@ -12,13 +12,14 @@ TRAIN: Path = DATA_ROOT / "train"
 TEST: Path = DATA_ROOT / "test"
 LABELS: Path = DATA_ROOT / "Labels.json"
 SPLIT: Path = DATA_ROOT / "split.json"
-RESULTS = Path("../results")
-FIGURES = Path("../results/figures")
-LOGS = Path("../logs")
-TENSORBOARD: Path = LOGS / "tensorboard"
-CHECKPOINTS = Path("../checkpoints")
+
+# ========= 实验划分 =========
+RESULTS = PROJECT_ROOT / "results"
+LOGS = PROJECT_ROOT / "logs"
+CHECKPOINTS = PROJECT_ROOT / "checkpoints"
 
 # ========== 数据 ==========
+NUM_CLASSES = 100
 TRAIN_VAL_SPLIT_RATIO = 0.95
 BATCH_SIZE = 128
 NUM_WORKERS = 10
@@ -29,10 +30,7 @@ SEED = 42
 
 # ========== 数据增强 ==========
 NUM_OPS = 2
-RANDAUGMENT_MAGNITUDE = 9
 RANDOM_ERASING_P = 0.25
-MIXUP_ALPHA = 0.2
-CUTMIX_ALPHA = 1.0
 PREFECTCH_FACTOR = 4
 
 # ========== 训练 ==========
@@ -40,5 +38,3 @@ EPOCHS = 200
 WARMUP_EPOCHS = 5
 BASE_LR = 0.1 * BATCH_SIZE  / 256
 WEIGHT_DECAY = 1e-4
-LABEL_SMOOTHING = 0.1
-USE_AMP = True

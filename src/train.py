@@ -9,17 +9,17 @@ from torch.utils.tensorboard import SummaryWriter
 from torch.amp import GradScaler, autocast
 
 from config import *
-from model import ResNet50
+from model import  get_model
 from utils import (get_dataloader, AverageMeter, set_seed, accuracy)
 
 
-def setup_logging():
+def setup_logging(logs_dir: Path):
     """配置 logging 模块"""
 
-    LOGS.mkdir(parents=True, exist_ok=True)
+    logs_dir.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(
         level=logging.INFO,
-        format="%(asctime)s - %(levelnames)s - %(message)s",
+        format="%(asctime)s - %(levelname)s - %(message)s",
         handlers=[
             logging.FileHandler(LOGS / "train.log"),
             logging.StreamHandler()
@@ -93,11 +93,11 @@ def train_one_epoch(
 
         if step % 50 == 0:
             logging.info(
-                f"- Train epoch [{epoch}], step {step}/{len_epoch}"
+                f"- Train epoch [{epoch}], step {step}/{len_epoch} "
                 f"Lr: {lr:.6f} Loss: {losses.avg:.4f} Accuracy: {top1.avg:.2f}%"
             )
 
-    return losses.avg, top1.avg
+    return losses.avg, top1.avg, lr
 
 
 @torch.no_grad()
@@ -120,25 +120,44 @@ def validate(model: nn.Module,
 
         acc1, acc5 = accuracy(outputs, targets, topk=(1, 5))
         losses.update(loss.item(), inputs.size(0))
-        top1.update(acc1[0], inputs.size(0))
-        top5.update(acc5[0], inputs.size(0))
+        top1.update(acc1, inputs.size(0))
+        top5.update(acc5, inputs.size(0))
 
     return losses.avg, top1.avg, top5.avg
 
 
 def main():
-    setup_logging()
+    # ===== 命令行获取参数 =====
     parser = argparse.ArgumentParser()
     parser.add_argument("--split-json", type=str, default=SPLIT)
-    parser.add_argument("--resume", type=str, default=None,
-                        help="断点续训用的checkpoint路径，不指定则从头开始训练")
+    parser.add_argument(
+        "--resume", type=str, default=None,
+        help="断点续训用的checkpoint路径，不指定则从头开始训练"
+    )
+    parser.add_argument(
+        "--model-type", type=str, default="resnet50",
+        choices=["resnet50"],
+        help="可选模型类型"
+    )
     args = parser.parse_args()
 
+    # ===== 设置对应实验路径 =====
+    logs_dir = LOGS / Path(args.model_type)
+    checkpoints_dir = CHECKPOINTS / Path(args.model_type)
+    tensorboard_dir = logs_dir / "tensorboard"
+    results_dir = RESULTS / Path(args.model_type)
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    checkpoints_dir.mkdir(parents=True, exist_ok=True)
+    tensorboard_dir.mkdir(parents=True, exist_ok=True)
+    results_dir.mkdir(parents=True, exist_ok=True)
+
+    setup_logging(logs_dir)
     set_seed()
+
+    # ===== 获取训练数据 =====
     train_loader, val_loader = get_dataloader(Path(args.split_json))
     len_epoch = len(train_loader)
-
-    model = ResNet50().to(DEVICE)
+    model = get_model(args.model_type)
     criterion = nn.CrossEntropyLoss().to(DEVICE)
     optimizer = torch.optim.SGD(
         model.parameters(),
@@ -149,6 +168,7 @@ def main():
     )
     scaler = GradScaler(device=DEVICE, enabled=True)
 
+    # ===== 数据初始化 =====
     start_epoch = 0
     best_acc = 0.0
     history = {
@@ -156,7 +176,7 @@ def main():
         "val_loss": [], "val_acc1": [], "val_acc5": []
     }
 
-    # 断点续训
+    # ===== 断点续训 =====
     if args.resume is not None:
         checkpoint = torch.load(args.resume, map_location=DEVICE)
         model.load_state_dict(checkpoint["model_state_dict"])
@@ -166,14 +186,13 @@ def main():
         history = checkpoint["history"]
         logging.info(f"从 {args.resume} 恢复训练，将从 epoch {start_epoch} 继续")
 
-    CHECKPOINTS.mkdir(parents=True, exist_ok=True)
-    TENSORBOARD.mkdir(parents=True, exist_ok=True)
-    writer = SummaryWriter(TENSORBOARD)
+    writer = SummaryWriter(tensorboard_dir)
 
-    logging.info("----- 训练开始 -----\n")
+    # ===== 训练循环 =====
+    logging.info("--------- 训练开始 ---------\n")
     for epoch in range(start_epoch, EPOCHS):
-        logging.info(f"===== 第 {epoch} 个 epoch =====")
-        train_loss, train_acc1 = train_one_epoch(
+        logging.info(f"========= 第 {epoch + 1} 个 epoch =========")
+        train_loss, train_acc1, lr = train_one_epoch(
             model, train_loader, criterion, optimizer, scaler, epoch, len_epoch
         )
         val_loss, val_acc1, val_acc5 = validate(
@@ -192,12 +211,14 @@ def main():
         history["val_acc1"].append(val_acc1)
         history["val_acc5"].append(val_acc5)
 
-        writer.add_scalar("Loss/train", train_loss, epoch)
-        writer.add_scalar("Loss/val", val_loss, epoch)
-        writer.add_scalar("Accuracy/train_top1", train_acc1, epoch)
-        writer.add_scalar("Accuracy/val_top1", val_acc1, epoch)
-        writer.add_scalar("Accuracy/val_top5", val_acc5, epoch)
+        writer.add_scalars("Loss", {"train": train_loss, "val": val_loss}, epoch + 1)
+        writer.add_scalars("Accuracy",{"train": train_acc1, "val": val_acc1},  epoch + 1)
+        writer.add_scalars(
+            "Accuracy/val_top1&top5", {"val_acc1": val_acc1, "val_acc5": val_acc5}, epoch + 1
+        )
+        writer.add_scalar("Learning Rate", lr, epoch + 1)
 
+        # ===== 最高 top1_acc =====
         is_best = val_acc1 > best_acc
         if is_best:
             best_acc = val_acc1
@@ -209,14 +230,15 @@ def main():
             "best_acc": best_acc,
             "history": history
         }
-        torch.save(state, CHECKPOINTS / "latest.pth")
+        torch.save(state, checkpoints_dir / "latest.pth")
         if is_best:
-            torch.save(state, CHECKPOINTS / "best.pth")
+            torch.save(state, checkpoints_dir / "best.pth")
+            logging.info(f"- 最佳模型更新，val_acc1: {best_acc:.2f}%")
         if (epoch + 1) % 10 == 0:
-            torch.save(state, CHECKPOINTS / f"epoch_{epoch + 1}.pth")
+            torch.save(state, checkpoints_dir / f"epoch_{epoch + 1}.pth")
 
-    RESULTS.mkdir(parents=True, exist_ok=True)
-    with open(RESULTS / "history.json", "w", encoding="utf-8") as f:
+    # ===== 保存训练历史 =====
+    with open(results_dir / "history.json", "w", encoding="utf-8") as f:
         json.dump(history, f)
     logging.info(f"训练完成，最佳 val_acc1: {best_acc:.2f}%")
 

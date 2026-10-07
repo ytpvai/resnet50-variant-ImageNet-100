@@ -5,11 +5,33 @@ import numpy as np
 from pathlib import Path
 from sklearn.metrics import classification_report, confusion_matrix
 
+from PIL import Image
 from config import *
 from model import load_pretrained
 from utils import set_seed, build_transforms
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset
 from visualize import plot_confusion_matrix
+
+
+class ListDataset(Dataset):
+    """从 (path, label) 样本列表构建的数据集（测试集用）。
+
+    注意必须定义在模块顶层：Windows 上 DataLoader 开 num_workers>0 时
+    用 spawn 方式创建子进程，dataset 对象要整个 pickle 后传过去，
+    而函数内部定义的局部类无法被 pickle。
+    """
+
+    def __init__(self, samples, transform):
+        self.samples = samples
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, idx):
+        path, label = self.samples[idx]
+        image = Image.open(path).convert("RGB")
+        return self.transform(image), label
 
 
 def load_test_loader(archive_dir, split_json):
@@ -24,22 +46,7 @@ def load_test_loader(archive_dir, split_json):
         for img_path in cls_dir.iterdir():
             test_samples.append((str(img_path), class_to_label[cls_dir.name]))
 
-    # 临时符合ImageNet100Dataset接口的小类
-    class _TestDataset(torch.utils.data.Dataset):
-        def __init__(self, samples, transform):
-            self.samples = samples
-            self.transform = transform
-
-        def __len__(self):
-            return len(self.samples)
-
-        def __getitem__(self, idx):
-            from PIL import Image
-            path, label = self.samples[idx]
-            image = Image.open(path).convert("RGB")
-            return self.transform(image), label
-
-    test_set = _TestDataset(test_samples, build_transforms(train=False))
+    test_set = ListDataset(test_samples, build_transforms(train=False))
     return DataLoader(test_set, batch_size=BATCH_SIZE, shuffle=False,
                        num_workers=NUM_WORKERS), classes
 

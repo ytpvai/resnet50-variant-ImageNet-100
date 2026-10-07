@@ -152,7 +152,14 @@ class InceptionResBlock(nn.Module):
 
 
 class ResNeXtBottleneck(nn.Module):
-    """ ResNeXt 分组卷积 """
+    """ ResNeXt 分组卷积
+
+    32x4d 加宽方式（与论文/torchvision一致）：输出通道数保持
+    4*mid_channels 不变（层间通道级联与标准ResNet相同），只把
+    分组卷积所在的 conv1/conv2 通道数加倍——每组从 mid/32 个输入
+    通道变成 mid/16 个（layer1 即 32组x每4通道）。这样参数量和
+    FLOPs 才能与标准 ResNet-50 基本持平，对比才公平。
+    """
 
     expansion = 4
     cardinality = 32   # 分组数，ResNeXt论文验证的经典取值
@@ -160,16 +167,20 @@ class ResNeXtBottleneck(nn.Module):
     def __init__(self, in_channels, mid_channels, stride=1, downsample=None):
         super().__init__()
         out_channels = mid_channels * self.expansion
-        assert mid_channels % self.cardinality == 0, \
-            f"mid_channels({mid_channels})必须能被cardinality({self.cardinality})整除"
+        grouped_channels = mid_channels * 2   # 分组卷积部分的加宽（32x4d）
+        assert grouped_channels % self.cardinality == 0, \
+            f"分组通道数({grouped_channels})必须能被cardinality({self.cardinality})整除"
 
-        self.conv1 = nn.Conv2d(in_channels, mid_channels, kernel_size=1, bias=False)
-        self.bn1 = nn.BatchNorm2d(mid_channels)
-        self.conv2 = nn.Conv2d(mid_channels, mid_channels, kernel_size=3, stride=stride,
-                                padding=1, groups=self.cardinality, bias=False)
-        self.bn2 = nn.BatchNorm2d(mid_channels)
-        self.conv3 = nn.Conv2d(mid_channels, out_channels, kernel_size=1, bias=False)
+        self.conv1 = nn.Conv2d(in_channels, grouped_channels, kernel_size=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(grouped_channels)
+        self.conv2 = nn.Conv2d(grouped_channels, grouped_channels, kernel_size=3,
+                               stride=stride, padding=1, groups=self.cardinality,
+                               bias=False)
+        self.bn2 = nn.BatchNorm2d(grouped_channels)
+        self.conv3 = nn.Conv2d(grouped_channels, out_channels, kernel_size=1, bias=False)
         self.bn3 = nn.BatchNorm2d(out_channels)
+        # SE 通道注意力：分组卷积内部组间隔离，靠 SE 在卷积后做一次全局跨通道加权
+        self.se = SEModule(out_channels, reduction=4)
         self.relu = nn.ReLU(inplace=True)
         self.downsample = downsample
 
@@ -178,6 +189,7 @@ class ResNeXtBottleneck(nn.Module):
         out = self.relu(self.bn1(self.conv1(x)))
         out = self.relu(self.bn2(self.conv2(out)))
         out = self.bn3(self.conv3(out))
+        out = self.se(out)
         if self.downsample is not None:
             identity = self.downsample(x)
         out += identity
@@ -198,7 +210,7 @@ class ResNet50(nn.Module):
             block_classes = list(block_cls)
         # 或只传一个
         else:
-            block_classes = [block_cls] * 4 
+            block_classes = [block_cls] * 4
 
         self.in_channels = 64
 
@@ -294,7 +306,7 @@ def get_model(model_type="resnet50", legacy_downsample=False):
     elif model_type == "3SE_1incep":
         block_cls = [SEBottleneck, SEBottleneck, SEBottleneck, InceptionResBlock]
     elif model_type == "resnext50":
-        block_cls = ResNeXtBottleneck
+        block_cls = ResNeXtBottleneck   # 32x4d 加宽在 block 内部实现
     else:
         raise ValueError(f"未知的model_type: {model_type}")
     model = ResNet50(block_cls, legacy_downsample=legacy_downsample)

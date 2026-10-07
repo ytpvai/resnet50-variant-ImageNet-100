@@ -1,6 +1,7 @@
 import torch
 from torch import nn
-from config import NUM_CLASSES, DEVICE
+from pathlib import Path
+from config import NUM_CLASSES, DEVICE, CHECKPOINTS
 
 
 # ===== 基础 Bottleneck 块 =====
@@ -151,9 +152,13 @@ class InceptionResBlock(nn.Module):
 
 
 class ResNet50(nn.Module):
-    def __init__(self, block_cls: nn.Module | list[nn.Module] =Bottleneck):
+    def __init__(self, block_cls: nn.Module | list[nn.Module] =Bottleneck,
+                 legacy_downsample: bool = False):
         super().__init__()
 
+        # 旧版 checkpoint（ResNet-D 改动之前训练的）的 downsample 是 Conv(stride)+BN，
+        # 加载这类权重时需要按旧结构建模型，否则 state_dict 对不上
+        self.legacy_downsample = legacy_downsample
          # 统一转换成一个长度为4的列表
         if isinstance(block_cls, (list, tuple)):
             assert len(block_cls) == 4, "block_cls传列表时，必须正好是4个元素，对应layer1~4"
@@ -213,14 +218,17 @@ class ResNet50(nn.Module):
         out_channels = mid_channels * block_cls.expansion
         if stride != 1 or self.in_channels != out_channels:
 
-            # 加入 avgpool 减少信息在 stride 非 1 时在 1*1 卷积的损失
+            # 新版（ResNet-D）：AvgPool 前置做空间下采样，减少 stride 在 1*1 卷积上的信息损失
+            # 旧版（legacy）：直接 Conv(stride)+BN，与早期训练的 checkpoint 结构一致
             temp_layers = []
-            if stride != 1:
+            if stride != 1 and not self.legacy_downsample:
                 temp_layers.append(nn.AvgPool2d(
                         kernel_size=stride, stride=stride, ceil_mode=True, count_include_pad=False
                 )) # ceil_mode=True 补充虚拟 0，需 c_i_p 除去其影响
+            conv_stride = 1 if (stride != 1 and not self.legacy_downsample) else stride
             temp_layers.append(
-                nn.Conv2d(self.in_channels, out_channels, kernel_size=1, stride=1, bias=False)
+                nn.Conv2d(self.in_channels, out_channels, kernel_size=1,
+                          stride=conv_stride, bias=False)
             )
             temp_layers.append(nn.BatchNorm2d(out_channels))
             downsample = nn.Sequential(*temp_layers)
@@ -245,7 +253,7 @@ class ResNet50(nn.Module):
                 nn.init.constant_(m.bn3.weight, 0)
 
 
-def get_model(model_type="resnet50"):
+def get_model(model_type="resnet50", legacy_downsample=False):
     if model_type == "resnet50":
         block_cls = Bottleneck
     elif model_type == "4_SE":
@@ -254,9 +262,29 @@ def get_model(model_type="resnet50"):
         block_cls = [SEBottleneck, SEBottleneck, SEBottleneck, InceptionResBlock]
     else:
         raise ValueError(f"未知的model_type: {model_type}")
-    model = ResNet50(block_cls)
+    model = ResNet50(block_cls, legacy_downsample=legacy_downsample)
 
     return model.to(DEVICE)
+
+
+def load_pretrained(model_type="resnet50", checkpoint_path=None):
+    """构建与 checkpoint 匹配的模型并加载权重，返回 (model, checkpoint)。
+
+    历史原因：ResNet-D 改动之前训练的 checkpoint（如旧版 resnet50）的
+    downsample 是 Conv(stride)+BN，之后的是 AvgPool+Conv+BN。
+    这里通过检查 state_dict 里的关键key自动判断该用哪种结构，
+    避免结构对不上导致 load_state_dict 报错。
+    """
+    ckpt_path = Path(checkpoint_path) if checkpoint_path \
+        else CHECKPOINTS / model_type / "best.pth"
+    checkpoint = torch.load(ckpt_path, map_location=DEVICE)
+    state = checkpoint["model_state_dict"]
+
+    # 新版 downsample 是3层 Sequential，BN 在 index 2；旧版2层，没有 index 2
+    legacy = "layer2.0.downsample.2.weight" not in state
+    model = get_model(model_type, legacy_downsample=legacy)
+    model.load_state_dict(state)
+    return model, checkpoint
 
 
 if __name__ == "__main__":

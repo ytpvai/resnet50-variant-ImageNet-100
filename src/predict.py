@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 
 from config import *
 import plot_style
-from model import get_model
+from model import load_pretrained
 
 plot_style.apply_style()
 
@@ -73,10 +73,7 @@ def main():
         help="可选模型类型"
     )
     parser.add_argument("--image", type=str, default=None)
-    parser.add_argument(
-        "--checkpoint", type=str,
-        default=CHECKPOINTS / "resnet50" / "best.pth"
-    )
+    parser.add_argument("--checkpoint", type=str, default=None)
     parser.add_argument("--split-json", type=str, default=SPLIT)
     args = parser.parse_args()
 
@@ -86,13 +83,10 @@ def main():
     with open(args.split_json, "r") as f:
         classes = json.load(f)["class_names"]
 
-    model = get_model(args.model_type)
     if not Path(args.checkpoint).exists():
         print("此路径不存在，请先运行: python train.py")
         return
-
-    checkpoint = torch.load(args.checkpoint, map_location=DEVICE)
-    model.load_state_dict(checkpoint["model_state_dict"])
+    model, _ = load_pretrained(args.model_type, args.checkpoint)
     print(f"已加载模型{args.model_type}")
 
     if args.image:

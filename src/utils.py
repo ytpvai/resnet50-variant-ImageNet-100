@@ -29,23 +29,31 @@ class IN100Dataset(Dataset):
         image = self.transform(image)
         return image, label
     
-def get_dataloader(split_path: Path):
-    """构建训练和验证用的 DataLoader"""
+def build_transforms(train: bool) -> T.Compose:
+    """构建预处理流程：训练用带随机增强的，评估/测试/预测用确定性的"""
 
-    transform_train = T.Compose([
-        T.RandomResizedCrop(IMAGE_SIZE),
-        T.RandomHorizontalFlip(),
-        T.RandAugment(num_ops=NUM_OPS, magnitude=RAND_AUGMENT_MAGNITUDE),
-        T.ToTensor(),
-        T.Normalize(MEAN, STD),
-        T.RandomErasing(p=RANDOM_ERASING_P)
-    ])
-    transform_val = T.Compose([
+    if train:
+        return T.Compose([
+            T.RandomResizedCrop(IMAGE_SIZE),
+            T.RandomHorizontalFlip(),
+            T.RandAugment(num_ops=NUM_OPS, magnitude=RAND_AUGMENT_MAGNITUDE),
+            T.ToTensor(),
+            T.Normalize(MEAN, STD),
+            T.RandomErasing(p=RANDOM_ERASING_P)
+        ])
+    return T.Compose([
         T.Resize(256),
         T.CenterCrop(IMAGE_SIZE),
         T.ToTensor(),
         T.Normalize(MEAN, STD)
     ])
+
+
+def get_dataloader(split_path: Path):
+    """构建训练和验证用的 DataLoader"""
+
+    transform_train = build_transforms(train=True)
+    transform_val = build_transforms(train=False)
 
     train_set = IN100Dataset(split_path, "train", transform_train)
     val_set = IN100Dataset(split_path, "val", transform_val)

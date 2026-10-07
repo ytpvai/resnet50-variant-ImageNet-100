@@ -151,6 +151,39 @@ class InceptionResBlock(nn.Module):
         return self.relu(out)
 
 
+class ResNeXtBottleneck(nn.Module):
+    """ ResNeXt 分组卷积 """
+
+    expansion = 4
+    cardinality = 32   # 分组数，ResNeXt论文验证的经典取值
+
+    def __init__(self, in_channels, mid_channels, stride=1, downsample=None):
+        super().__init__()
+        out_channels = mid_channels * self.expansion
+        assert mid_channels % self.cardinality == 0, \
+            f"mid_channels({mid_channels})必须能被cardinality({self.cardinality})整除"
+
+        self.conv1 = nn.Conv2d(in_channels, mid_channels, kernel_size=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(mid_channels)
+        self.conv2 = nn.Conv2d(mid_channels, mid_channels, kernel_size=3, stride=stride,
+                                padding=1, groups=self.cardinality, bias=False)
+        self.bn2 = nn.BatchNorm2d(mid_channels)
+        self.conv3 = nn.Conv2d(mid_channels, out_channels, kernel_size=1, bias=False)
+        self.bn3 = nn.BatchNorm2d(out_channels)
+        self.relu = nn.ReLU(inplace=True)
+        self.downsample = downsample
+
+    def forward(self, x):
+        identity = x
+        out = self.relu(self.bn1(self.conv1(x)))
+        out = self.relu(self.bn2(self.conv2(out)))
+        out = self.bn3(self.conv3(out))
+        if self.downsample is not None:
+            identity = self.downsample(x)
+        out += identity
+        return self.relu(out)
+
+
 class ResNet50(nn.Module):
     def __init__(self, block_cls: nn.Module | list[nn.Module] =Bottleneck,
                  legacy_downsample: bool = False):
@@ -260,6 +293,8 @@ def get_model(model_type="resnet50", legacy_downsample=False):
         block_cls = SEBottleneck
     elif model_type == "3SE_1incep":
         block_cls = [SEBottleneck, SEBottleneck, SEBottleneck, InceptionResBlock]
+    elif model_type == "resnext50":
+        block_cls = ResNeXtBottleneck
     else:
         raise ValueError(f"未知的model_type: {model_type}")
     model = ResNet50(block_cls, legacy_downsample=legacy_downsample)

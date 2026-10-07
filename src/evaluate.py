@@ -83,7 +83,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--model-type", type=str, default="resnet50",
-        choices=["resnet50", "4_SE", "3SE_1incep"],
+        choices=["resnet50", "4_SE", "3SE_1incep", "resnext50"],
         help="可选模型类型"
     )
     parser.add_argument("--checkpoint", type=str, default=None)

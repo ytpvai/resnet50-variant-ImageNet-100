@@ -1,6 +1,6 @@
 import torch
 from torch import nn
-from config import NUM_CLASSES, DEVICE, REDUCTION
+from config import NUM_CLASSES, DEVICE
 
 
 # ===== 基础 Bottleneck 块 =====
@@ -47,7 +47,11 @@ class Bottleneck(nn.Module):
 # ===== SE Bottleneck 块 =====
 
 class SEModule(nn.Module):
-    def __init__(self, channels, reduction=REDUCTION):
+    """SE 模块"""
+
+    reduction = 4
+
+    def __init__(self, channels, reduction=reduction):
         super().__init__()
         self.avgpool = nn.AdaptiveAvgPool2d(1)
         self.maxpool = nn.AdaptiveMaxPool2d(1)
@@ -67,7 +71,10 @@ class SEModule(nn.Module):
         return x * s
 
 class SEBottleneck(Bottleneck):
-    def __init__(self, in_channels, mid_channels, stride=1, downsample=None, reduction=REDUCTION):
+
+    reduction = 4
+
+    def __init__(self, in_channels, mid_channels, stride=1, downsample=None, reduction=reduction):
         super().__init__(in_channels, mid_channels, stride, downsample)
         out_channels = mid_channels * self.expansion
         self.se = SEModule(out_channels, reduction=reduction)
@@ -90,6 +97,7 @@ class InceptionResBlock(nn.Module):
     """Inception, ResNet, SE 混合"""
 
     expansion = 4
+    reduction = 4
 
     def __init__(self, in_channels, mid_channels, stride=1, downsample=None):
         super().__init__()
@@ -121,9 +129,9 @@ class InceptionResBlock(nn.Module):
         )
         self.se = nn.Sequential(
             nn.AdaptiveAvgPool2d(1),
-            nn.Conv2d(out_channels, out_channels // REDUCTION, kernel_size=1),
+            nn.Conv2d(out_channels, out_channels // self.reduction, kernel_size=1),
             nn.ReLU(inplace=True),
-            nn.Conv2d(out_channels // REDUCTION, out_channels, kernel_size=1),
+            nn.Conv2d(out_channels // self.reduction, out_channels, kernel_size=1),
             nn.Sigmoid()
         )
         self.project = nn.Conv2d(branch_channels * 3, out_channels, kernel_size=1, bias=False)
@@ -212,9 +220,9 @@ class ResNet50(nn.Module):
                         kernel_size=stride, stride=stride, ceil_mode=True, count_include_pad=False
                 )) # ceil_mode=True 补充虚拟 0，需 c_i_p 除去其影响
             temp_layers.append(
-                nn.Conv2d(self.in_channels, out_channels, kernel_size=1, stride=1, bias=False),
-                nn.BatchNorm2d(out_channels)
+                nn.Conv2d(self.in_channels, out_channels, kernel_size=1, stride=1, bias=False)
             )
+            temp_layers.append(nn.BatchNorm2d(out_channels))
             downsample = nn.Sequential(*temp_layers)
 
         layers = [block_cls(self.in_channels, mid_channels, stride, downsample)]

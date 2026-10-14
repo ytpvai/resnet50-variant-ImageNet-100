@@ -1,6 +1,7 @@
 import argparse
 import json
 import torch
+from datetime import datetime
 import numpy as np
 from pathlib import Path
 from sklearn.metrics import classification_report, confusion_matrix
@@ -42,8 +43,8 @@ def load_test_loader(archive_dir, split_json):
 
     test_samples = []
     test_dir = archive_dir / "test"
-    for cls_dir in test_dir.iterdir():
-        for img_path in cls_dir.iterdir():
+    for cls_dir in sorted(test_dir.iterdir()):
+        for img_path in sorted(cls_dir.iterdir()):
             test_samples.append((str(img_path), class_to_label[cls_dir.name]))
 
     test_set = ListDataset(test_samples, build_transforms(train=False))
@@ -79,6 +80,45 @@ def evaluate_model(model, test_loader, device, classes):
     return np.array(all_targets), np.array(all_preds), np.array(all_probs), cm
 
 
+def compute_metrics(targets: np.ndarray, preds: np.ndarray,
+                    probs: np.ndarray, cm: np.ndarray, classes: list[str]):
+    n = len(targets)
+    top1 = float((preds == targets).mean() * 100)
+
+    top5_idx = np.argsort(-probs, axis=1)[:, :5]
+    top5 = float((top5_idx == targets[:, None]).any(axis=1).mean() * 100)
+
+    per_class_acc = cm.diagonal() / np.maximum(cm.sum(axis=1), 1)
+
+    p = top1 / 100
+    stderr = float(np.sqrt(p * (1 - p) / n) * 100)  # top-1 的标准误（百分点）
+
+    return {
+        "num_samples": int(n),
+        "top1": top1,
+        "top5": top5,
+        "top1_stderr": stderr,
+        "per_class_acc": {c: float(a * 100) for c, a in zip(classes, per_class_acc)},
+    }
+
+
+def save_results(result_dir: Path, metrics, extra, targets, preds,
+                 probs: np.ndarray, cm, paths: list[str]):
+    result_dir.mkdir(parents=True, exist_ok=True)
+
+    with open(result_dir / "test_metrics.json", "w", encoding="utf-8") as f:
+        json.dump({**extra, **metrics}, f, indent=2, ensure_ascii=False)
+
+    np.savez_compressed(
+        result_dir / "test_outputs.npz",
+        targets=targets,
+        preds=preds,
+        probs=probs.astype(np.float32),
+        cm=cm,
+        paths=np.array(paths),
+    )
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -95,7 +135,8 @@ def main():
     checkpoint_path = Path(args.checkpoint) if args.checkpoint \
         else CHECKPOINTS / args.model_type / "best.pth"
 
-    figures_dir = RESULTS / args.model_type / "figures"
+    result_dir = RESULTS / args.model_type
+    figures_dir: Path = result_dir / "figures"
     figures_dir.mkdir(parents=True, exist_ok=True)
 
     test_loader, classes = load_test_loader(DATA_ROOT, args.split_json)
@@ -109,6 +150,18 @@ def main():
     print(f"已加载模型: {checkpoint_path}")
 
     targets, preds, probs, cm = evaluate_model(model, test_loader, DEVICE, classes)
+
+    metrics = compute_metrics(targets, preds, probs, cm, classes)
+    print(f"\nTop-1: {metrics['top1']:.2f}% (标准误 ±{metrics['top1_stderr']:.2f})"
+          f"  Top-5: {metrics['top5']:.2f}%")
+
+    paths = [p for p, _ in test_loader.dataset.samples]
+    extra = {
+        "model_type": args.model_type,
+        "checkpoint": str(checkpoint_path),
+        "evaluated_at": datetime.now().isoformat(timespec="seconds"),
+    }
+    save_results(result_dir, metrics, extra, targets, preds, probs, cm, paths)
 
     plot_confusion_matrix(cm, classes, figures_dir / "confusion_matrix.png")
     print("\n评估完成!")

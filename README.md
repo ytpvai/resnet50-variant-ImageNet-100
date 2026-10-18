@@ -1,8 +1,10 @@
-# ImageNet-100 上的 ResNet-50 变体对比：通道注意力、Inception 与分组卷积
+# 用 ResNet-50 及其变体从零训练 ImageNet 100
+
+[English](README.en.md) | **简体中文**
 
 在 ImageNet-100（100 类）上从零训练 ResNet-50 及三个改进变体，在独立的官方验证集（5000 张）上评估。最好的变体 `4_SE`（每个 Bottleneck 都加入通道注意力）test top-1 为 **87.82%**，baseline 为 85.30%。
 
-全部代码基于 PyTorch，数据加载、训练、评估、可视化均为自己实现。
+代码基于 PyTorch，除部分用于处理 windows 环境的适配和可视化代码为 AI 实现外，其余均为自己实现。
 
 ## 结果
 
@@ -18,17 +20,18 @@
 
 ![Test top-1 对比](results/test_top1.png)
 
-### 怎么读这些结果
+### 结果解读
 
 1. 三个变体都高于 baseline（+1.4 到 +2.5 个点），其中 `4_SE` 与 baseline 的差距最明确。
 2. `4_SE`、`resnext50`、`3SE_1incep` 三者彼此相差不超过 1.14 个点，落在各自的置信区间内，**无法区分谁更好**。
-3. layer4 换成 Inception 块没有带来额外收益：`3SE_1incep` 的点估计比 `4_SE` 低 1.14 个点（不显著）。
+3. layer4 换成 Inception + SE 块（其 SE 为仅平均池化的单路版本）没有带来额外收益：3SE_1incep 的点估计比 4_SE 低 1.14 个点（不显著）。这个差异同时包含 Inception 多分支结构和注意力形式两处改动，不能单独归因于 Inception。
 4. **变体的参数量都比 baseline 多约 40%**，主要来自 `reduction=4` 的通道注意力（见下文）。因此本项目无法区分提升来自注意力机制本身，还是来自更大的模型容量，也没有做参数量匹配的对照。
 5. 四个模型的每类准确率两两相关系数为 0.95 – 0.97，错误集中在同一批细粒度近邻类别上，改 block 结构没有改变"哪些类难"这件事。
 
 `4_SE` 的混淆矩阵（100×100，色标上限 50 即每类样本数）：
 
 ![4_SE 混淆矩阵](results/4_SE/figures/confusion_matrix.png)
+
 
 ## 模型结构
 
@@ -41,18 +44,58 @@
 
 各变体的差异：
 
-| 模型 | 差异 |
-|---|---|
-| `resnet50` | 标准 Bottleneck（1×1 → 3×3 → 1×1，expansion = 4） |
-| `4_SE` | 每个 Bottleneck 的残差分支末尾加通道注意力，位于与 shortcut 相加之前 |
-| `3SE_1incep` | layer1 – 3 同 `4_SE`；layer4 换成 `InceptionResBlock`：三条并行分支（1×1、1×1 → 3×3、1×1 → 3×3 → 3×3），拼接后 1×1 投影，再接 SE |
-| `resnext50` | 分组卷积 Bottleneck（cardinality = 32，分组宽度从 4 起），同样加入通道注意力，所以它是"ResNeXt + 通道注意力"，不是原版 ResNeXt |
+各 stage 的规格（四个模型相同，输入 224×224）：
+
+| Stage | block 数 | mid 通道 | 输出通道 | 输出尺寸 |
+|---|---|---|---|---|
+| stem（三个 3×3 + MaxPool） | — | — | 64 | 56×56 |
+| layer1 | 3 | 64 | 256 | 56×56 |
+| layer2 | 4 | 128 | 512 | 28×28 |
+| layer3 | 6 | 256 | 1024 | 14×14 |
+| layer4 | 3 | 512 | 2048 | 7×7 |
+
+各模型在每个 stage 使用的 block：
+
+| 模型 | layer1 – 3 | layer4 |
+|---|---|---|
+| `resnet50` | Bottleneck | Bottleneck |
+| `4_SE` | SEBottleneck | SEBottleneck |
+| `3SE_1incep` | SEBottleneck | InceptionResBlock |
+| `resnext50` | ResNeXtBottleneck | ResNeXtBottleneck |
+
+`3SE_1incep` 与 `4_SE` 只在 layer4 的 3 个 block 上不同，其余完全一致；`resnet50`、`resnext50` 与 `4_SE` 则在全部 16 个 block 上都不同。
+
+### Block 内部结构
+
+记输入通道为 in，stage 的 mid 通道为 mid，block 输出通道为 4·mid。所有 block 的 stride 都放在 3×3 卷积上；下采样 shortcut 为 AvgPool(stride) + 1×1 conv + BN，当 stride 为 1 但通道数变化时（layer1 的第一个 block）只用 1×1 conv + BN。
+
+**Bottleneck（`resnet50`）**
+- 主路径：1×1 conv (in→mid) → BN → ReLU → 3×3 conv (mid→mid, stride) → BN → ReLU → 1×1 conv (mid→4·mid) → BN
+- 与 shortcut 相加后再过 ReLU
+
+**SEBottleneck（`4_SE`，以及 `3SE_1incep` 的 layer1 – 3）**
+- 主路径同 Bottleneck，在最后一个 BN 之后、与 shortcut 相加之前加通道注意力
+- 通道注意力：对特征做全局平均池化和全局最大池化，经同一个共享 MLP（1×1 conv，C→C/4，ReLU，1×1 conv，C/4→C），两路相加后过 sigmoid，得到的通道权重乘回特征
+
+**InceptionResBlock（`3SE_1incep` 的 layer4）**
+- 令 b = mid/2，三条并行分支都作用在输入上：
+  - 分支 1：AvgPool(stride) → 1×1 conv (in→b) → BN → ReLU
+  - 分支 2：1×1 conv (in→b) → BN → ReLU → 3×3 conv (b→b, stride) → BN → ReLU
+  - 分支 3：1×1 conv (in→b) → BN → ReLU → 3×3 conv (b→b) → BN → ReLU → 3×3 conv (b→b, stride) → BN → ReLU
+- 三个分支按通道拼接（3b 通道），经 1×1 conv (3b→4·mid) + BN 投影
+- 再接通道注意力（这里只用全局平均池化一路，reduction 为 4），最后与 shortcut 相加、ReLU
+
+**ResNeXtBottleneck（`resnext50`）**
+- 1×1 conv (in→2·mid) → BN → ReLU → 3×3 分组卷积 (2·mid→2·mid, groups=32, stride) → BN → ReLU → 1×1 conv (2·mid→4·mid) → BN
+- 分组宽度（每组通道数）在 layer1 – 4 依次为 4、8、16、32
+- 之后接与 `SEBottleneck` 相同的通道注意力，再与 shortcut 相加、ReLU
 
 关于"通道注意力"的实现细节：
 
 - `SEModule` 对特征同时做全局平均池化和全局最大池化，经**同一个**共享的两层 1×1 卷积 MLP（`reduction = 4`），两路输出相加后过 sigmoid 得到通道权重。这与原始 SE 只用平均池化不同，更接近 CBAM 的通道注意力模块。
 - `InceptionResBlock` 内部的 SE 是单路（仅平均池化）。
 - `reduction = 4` 比常见的 16 更大。在本项目的结构下，通道注意力给 `4_SE` 增加了 10.08M 参数（+42.5%）；如果取 16，增量约为 2.53M（+10.7%）。本项目的结果均基于 `reduction = 4`，没有对它做消融。
+
 
 ## 训练设置
 
@@ -73,14 +116,23 @@
 评估协议：
 
 - val 只用于训练监控和选择 `best.pth`。
-- 官方验证集（`val.X`）重命名为 `data/test`，只用于最终评估，其中每个类 50 张。
+- 官方验证集（`val.X`）重命名为 `data/test`，只用于最终评估，其中每个类 50 张。 
+
 
 ## 快速开始
 
-环境：Python 【待核对】，PyTorch 【待核对】，单张 【待核对】 GPU。
+环境：Python 3.10，PyTorch 2.12.0（CUDA 13.0 构建），单张 NVIDIA GeForce RTX 5050 Laptop GPU（8 GB）。
+
+非 PyTorch 依赖：
 
 ```bash
 pip install -r requirements.txt
+```
+
+torch / torchvision 需要带 CUDA 的构建，PyPI 上没有对应的 Windows 版本，用 PyTorch 官方源单独安装：
+
+```bash
+pip install torch==2.12.0 torchvision==0.27.0 --index-url https://download.pytorch.org/whl/cu130
 ```
 
 ### 1. 准备数据
@@ -119,24 +171,30 @@ python src/evaluate.py --model-type 4_SE
 - `test_outputs.npz`：逐样本的标签、预测、概率、混淆矩阵和图片路径，可用于配对显著性检验。
 - `figures/confusion_matrix.png`：混淆矩阵。
 
+
 ## 项目结构
 
 ```
 .
 ├── src/
+│   ├── __init__.py
 │   ├── config.py        # 路径与超参数
-│   ├── model.py         # 四个模型及 checkpoint 加载
-│   ├── utils.py         # 数据加载、增强、AverageMeter、accuracy
 │   ├── data_split.py    # train / val 划分
-│   ├── train.py         # 训练
 │   ├── evaluate.py      # 测试集评估
+│   ├── model.py         # 四个模型及 checkpoint 加载
+│   ├── plot_style.py    # 绘图风格设置
+│   ├── predict.py       # 单张图预测
+│   ├── train.py         # 训练
+│   ├── utils.py         # 数据加载、增强、AverageMeter、accuracy
 │   └── visualize.py     # 绘图
-├── docs/                # 文档用图
-├── results/<model>/     # history.json、test_metrics.json、figures/
-├── data/                # 不随仓库提供
-├── checkpoints/         # 不随仓库提供
-└── logs/                # 不随仓库提供
+├── results/
+│   ├── test_top1.png          # 四个模型的 test top-1 对比图
+│   └── <model>/               # history.json、test_metrics.json、test_outputs.npz、figures/
+├── data/                      # 不随仓库提供
+├── checkpoints/               # 不随仓库提供
+└── logs/                      # 不随仓库提供（<model>/tensorboard/ 为 TensorBoard 事件文件）
 ```
+
 
 ## 局限
 
@@ -145,7 +203,7 @@ python src/evaluate.py --model-type 4_SE
 - **参数量不匹配**：三个变体比 baseline 多约 40% 参数，提升可能部分来自容量增加，而不只是结构设计。
 - 四个候选模型是对照 test 结果比较的，存在轻微的选择偏差；严格来说，选择应基于 val。
 - 在有训练日志的两个模型上，val 成绩比 test 高约 3 个点，原因没有验证，所以上表只报告 test。
-- baseline 的训练配置：【待核对：确认 `resnet50` 与其余三个模型使用了完全相同的训练配置（epoch、label smoothing、weight decay、数据增强、随机种子）和相同的 downsample 结构；若不同，请在此如实说明，或用同一配置重训 baseline】
+
 
 ## 参考文献
 
@@ -157,7 +215,3 @@ python src/evaluate.py --model-type 4_SE
 - C. Szegedy et al. *Inception-v4, Inception-ResNet and the Impact of Residual Connections on Learning.* AAAI 2017.
 - E. D. Cubuk et al. *RandAugment: Practical Automated Data Augmentation with a Reduced Search Space.* CVPRW 2020.
 - Z. Zhong et al. *Random Erasing Data Augmentation.* AAAI 2020.
-
-## 许可
-
-代码许可：【待核对】。数据集和预训练权重的版权归各自所有者。

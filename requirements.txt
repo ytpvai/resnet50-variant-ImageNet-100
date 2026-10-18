@@ -1,0 +1,12 @@
+# 非 PyTorch 依赖，版本与实验环境一致（Python 3.10）。
+#
+# torch 和 torchvision 未列在此文件中：它们需要带 CUDA 的构建，
+# PyPI 上提供的 Windows 版本是 CPU-only。请按 README「快速开始」的说明，
+# 用 PyTorch 官方源安装：
+#   pip install torch==2.12.0 torchvision==0.27.0 --index-url https://download.pytorch.org/whl/cu130
+
+numpy==2.2.5
+Pillow==11.1.0
+matplotlib==3.10.9
+scikit-learn==1.7.2
+tensorboard==2.21.0
